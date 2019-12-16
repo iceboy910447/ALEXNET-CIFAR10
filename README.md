@@ -1,6 +1,9 @@
 # AlexNet CIFAR-10
-This repo contains implementation of AlexNet and SVM for classifying CIFAR-10 dataset
-
+# based on the github projekt from cgnorthcutt 
+# https://github.com/pytorch/examples/blob/master/imagenet/main.py
+# and AbhishekTaur
+# https://github.com/AbhishekTaur/AlexNet-CIFAR-10
+# adapted to work with Alexnet and CIFAR-10
 ### Project Requirements
 ```text
 torch==1.0.0.dev20181024
