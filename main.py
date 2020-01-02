@@ -1,4 +1,4 @@
-#import argparse
+import argparse
 import os
 import random
 import shutil
@@ -13,26 +13,29 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.optim
 import torch.multiprocessing as mp
-import torch.utils.data
+import torch.utils.data as data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-#from resnet_gn import resnet50
+import torchvision.models as models
 from alexnet import AlexNet
-
-# based on the github projekt from cgnorthcutt 
-# https://github.com/pytorch/examples/blob/master/imagenet/main.py
-# and AbhishekTaur
-# https://github.com/AbhishekTaur/AlexNet-CIFAR-10
-
-transform = transforms.Compose(
-    [transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
 # from resnet import resnet50  # the original BN model
-'''
+
+
+model_names = sorted(name for name in models.__dict__
+    if name.islower() and not name.startswith("__")
+    and callable(models.__dict__[name]))
+
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('data', metavar='DIR',
-                    help='path to dataset')
+parser.add_argument('--data', default='/data', type=str, metavar='DIR',
+                    help='path to dataset for imagenet')
+parser.add_argument('-d','--dataset',default='cifar10', type=str, metavar='SET',
+                    help='dataset to train on')
+parser.add_argument('-a', '--arch', metavar='ARCH', default='alexnet',
+                    choices=model_names,
+                    help='model architecture: ' +
+                        ' | '.join(model_names) +
+                        ' (default: resnet18)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
@@ -44,15 +47,20 @@ parser.add_argument('-b', '--batch-size', default=256, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
-parser.add_argument('-p', '--print-freq', default=10, type=int,
-                    metavar='N', help='print frequency (default: 10)')
+parser.add_argument('-drop','--drop_rate',default=0.5, type=float,
+                    metavar='drop', help= 'dropout rate for Alexnet (default:0.5)')
+
+parser.add_argument('-ptrain', '--print-freq-train', default=100, type=int,
+                    metavar='N', help= 'print frequency during training(default:100)')
+parser.add_argument('-ptest', '--print-freq-test', default=10, type=int,
+                    metavar='N',help= 'print frequency during testing(default:10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
@@ -74,30 +82,13 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
-'''
-#data_dir
-num_workers = 0
-Anzahl_epochen = 120
-Start_epoche = 0
-batch_groese = 2048
-learning_rate = 0.001
-#momentum
-weight_decay = 1e-4
-Frequenz_print = 5
-Fortsetzen = False #resume
-#world_size
-#rank
-GPU_ID = 0
-auswerten = False#evaluate
-
-
 
 best_acc1 = 0
 
 
 def main():
-    #args = parser.parse_args()
-    '''
+    args = parser.parse_args()
+
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -107,18 +98,17 @@ def main():
                       'which can slow down your training considerably! '
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
-    '''
-    if GPU_ID is not None:
+
+    if args.gpu is not None:
         warnings.warn('You have chosen a specific GPU. This will completely '
                       'disable data parallelism.')
-    '''
+
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
 
     args.distributed = args.world_size > 1 or args.multiprocessing_distributed
-    
+
     ngpus_per_node = torch.cuda.device_count()
-    
     if args.multiprocessing_distributed:
         # Since we have ngpus_per_node processes per node, the total world_size
         # needs to be adjusted accordingly
@@ -127,19 +117,17 @@ def main():
         # main_worker process function
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
     else:
-        '''
-    ngpus_per_node = torch.cuda.device_count()    
-    # Simply call main_worker function
-    main_worker(GPU_ID, ngpus_per_node)
+        # Simply call main_worker function
+        main_worker(args.gpu, ngpus_per_node, args)
 
 
-def main_worker(gpu, ngpus_per_node):
+def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
-    zu_nutzende_GPU = gpu
+    args.gpu = gpu
 
-    if zu_nutzende_GPU is not None:
-        print("Use GPU: {} for training".format(zu_nutzende_GPU))
-    '''
+    if args.gpu is not None:
+        print("Use GPU: {} for training".format(args.gpu))
+
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
             args.rank = int(os.environ["RANK"])
@@ -149,12 +137,61 @@ def main_worker(gpu, ngpus_per_node):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
-    '''
+    
+    # Data loading code
+    if (args.dataset == 'cifar10' or args.dataset == 'cifar100'):
+        dataloader = datasets.CIFAR10
+        num_classes = 10
+        transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+        trainset = dataloader(root = '.data', train=True, download = True, transform = transform)
+        valset = dataloader(root = '.data', train=False, download = True, transform = transform)
+        train_loader = data.DataLoader(trainset, batch_size=args.batch_size,shuffle=True, num_workers=args.workers)    
+    elif args.dataset== 'imagenet':
+        num_classes=1000
+        traindir = os.path.join(args.data, 'train')
+        valdir = os.path.join(args.data, 'val')
+
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+        trainset = datasets.ImageFolder(
+            traindir,
+            transform = transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+            ]))
+        valset = datasets.ImageFolder(
+            valdir, transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+            ]))
+    else:
+        print("Error: dataset unknown!")
+        
+
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(trainset)
+    else:
+        train_sampler = None
+    train_loader = data.DataLoader(
+            trainset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+            num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+    val_loader = data.DataLoader(
+            valset,
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
     # create model
-    print("=> creating model '{}'".format('resnet50'))
-    #model = resnet50()
-    model = AlexNet()
-    '''
+    print("=> creating model '{}'".format(args.arch))
+    if args.arch.startswith('alexnet'):
+        model = AlexNet(num_classes=num_classes, drop_rate=args.drop_rate)
+    else:
+        model = models.__dict__[args.arch](num_classes=num_classes)
+
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -172,98 +209,84 @@ def main_worker(gpu, ngpus_per_node):
             # DistributedDataParallel will divide and allocate batch_size to all
             # available GPUs if device_ids are not set
             model = torch.nn.parallel.DistributedDataParallel(model)
-    '''
-    #elif
-    if zu_nutzende_GPU is not None:
-        torch.cuda.set_device(zu_nutzende_GPU)
-        model = model.cuda(zu_nutzende_GPU)
+    elif args.gpu is not None:
+        torch.cuda.set_device(args.gpu)
+        model = model.cuda(args.gpu)
     else:
         # DataParallel will divide and allocate batch_size to all available GPUs
         model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.002)
-    '''
-    criterion = nn.CrossEntropyLoss().cuda(zu_nutzende_GPU)
-
-    optimizer = torch.optim.SGD(model.parameters(), learning_rate,
-                                momentum=momentum,
-                                weight_decay=weight_decay)
-    '''
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    if (args.dataset == 'cifar10' or args.dataset == 'cifar100'):
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay = args.weight_decay)
+    elif args.dataset == 'imagenet':
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
+    
     # optionally resume from a checkpoint
-    if Fortsetzen:
-        if os.path.isfile(Fortsetzen):
-            print("=> loading checkpoint '{}'".format(Fortsetzen))
-            checkpoint = torch.load(Fortsetzen)
-            Start_epoche = checkpoint['epoch']
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
             best_acc1 = checkpoint['best_acc1']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(Fortsetzen, checkpoint['epoch']))
+                  .format(args.resume, checkpoint['epoch']))
         else:
-            print("=> no checkpoint found at '{}'".format(Fortsetzen))
+            print("=> no checkpoint found at '{}'".format(args.resume))
 
     cudnn.benchmark = True
 
     # Data loading code
-    '''
-    traindir = os.path.join(data_dir, 'train')
-    valdir = os.path.join(data_dir, 'val')
     
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-    '''
-    train_dataset = datasets.CIFAR10(root='~/data', train=True,download=True, transform=transform)
-    test_dataset =  datasets.CIFAR10(root='~/data', train=False,download=True, transform=transform)
-    '''
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-    '''
-    '''
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:'''
-    train_sampler = None
-    
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_groese, shuffle=(train_sampler is None),
-        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+    dataloader = datasets.CIFAR10
+    num_classes = 10
+    transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-    val_loader = torch.utils.data.DataLoader( test_dataset,
-        batch_size=batch_groese, shuffle=False,
-        num_workers=num_workers, pin_memory=True)
-        
-    '''
-    if weight_decay:
-        validate(val_loader, model, criterion)
-        return'''
+    trainset = dataloader(root = '.data', train=True, download = True, transform = transform)
+    valset = dataloader(root = '.data', train=False, download = True, transform = transform)
+    train_loader = data.DataLoader(trainset, batch_size=args.batch_size,shuffle=True, num_workers=args.workers)
+
     
-    for epoch in range(0, Anzahl_epochen):
+
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(trainset)
+    else:
+        train_sampler = None
+
+    train_loader = data.DataLoader(
+        trainset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+    val_loader = data.DataLoader(
+        valset,
+        batch_size=args.batch_size, shuffle=False,
+        num_workers=args.workers, pin_memory=True)
+
+    if args.evaluate:
+        validate(val_loader, model, criterion, args)
+        return
+
+    for epoch in range(args.start_epoch, args.epochs):
         start_time = time.time()
-        '''
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        '''
-        adjust_learning_rate(optimizer, epoch)
+        adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        train(train_loader, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion)
+        acc1 = validate(val_loader, model, criterion, args)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
-        '''
+
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
             save_checkpoint({
@@ -272,10 +295,10 @@ def main_worker(gpu, ngpus_per_node):
                 'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
             }, is_best)
-        '''
         print("Time/epoch: {} sec".format(time.time() - start_time))
 
-def train(train_loader, model, criterion, optimizer, epoch):
+
+def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -290,9 +313,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if GPU_ID is not None:
-            input = input.cuda(GPU_ID, non_blocking=True)
-        target = target.cuda(GPU_ID, non_blocking=True)
+        if args.gpu is not None:
+            input = input.cuda(args.gpu, non_blocking=True)
+        target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
         output = model(input)
@@ -313,7 +336,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % Frequenz_print == 0:
+        if i % args.print_freq_train == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -324,7 +347,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
 
 
-def validate(val_loader, model, criterion):
+def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -336,9 +359,9 @@ def validate(val_loader, model, criterion):
     with torch.no_grad():
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
-            if GPU_ID is not None:
-                input = input.cuda(GPU_ID, non_blocking=True)
-            target = target.cuda(GPU_ID, non_blocking=True)
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
             output = model(input)
@@ -354,7 +377,7 @@ def validate(val_loader, model, criterion):
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % Frequenz_print == 0:
+            if i % args.print_freq_test == 0:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
@@ -393,9 +416,9 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = learning_rate * (0.1 ** (epoch // 30))
+    lr = args.lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -418,6 +441,4 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == '__main__':
-    from multiprocessing import freeze_support
-    freeze_support()
     main()
