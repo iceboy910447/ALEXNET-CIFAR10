@@ -1,0 +1,1 @@
+This folder contains multiple screenshots from tensorboard diagramms generated with the python notebook Alexnet Cifar100 Dropout
