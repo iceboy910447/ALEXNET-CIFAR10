@@ -18,6 +18,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from torch.utils.tensorboard import SummaryWriter
 from alexnet import AlexNet
 # from resnet import resnet50  # the original BN model
 
@@ -27,8 +28,7 @@ model_names = sorted(name for name in models.__dict__
     and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('--data', default='/data', type=str, metavar='DIR',
-                    help='path to dataset for imagenet')
+
 parser.add_argument('-d','--dataset',default='cifar10', type=str, metavar='SET',
                     help='dataset to train on')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='alexnet',
@@ -36,7 +36,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='alexnet',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=12, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -54,7 +54,7 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
-parser.add_argument('-drop','--drop_rate',default=0.5, type=float,
+parser.add_argument('-drop','--drop-rate',default=0.5, type=float,
                     metavar='drop', help= 'dropout rate for Alexnet (default:0.5)')
 
 parser.add_argument('-ptrain', '--print-freq-train', default=100, type=int,
@@ -82,7 +82,8 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
-
+parser.add_argument('-rf','--runfolder', default= 'aktueller_Run', type=str, 
+                    metavar='RF', help='Folder for saving Tensorboard run-files')
 best_acc1 = 0
 
 
@@ -139,36 +140,20 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
     
     # Data loading code
+    print("Using dataset {} for training".format(args.dataset))
     if (args.dataset == 'cifar10' or args.dataset == 'cifar100'):
-        dataloader = datasets.CIFAR10
-        num_classes = 10
+        if args.dataset == 'cifar10':
+            dataloader = datasets.CIFAR10
+            num_classes = 10
+        elif args.dataset == 'cifar100':
+            dataloader = datasets.CIFAR100
+            num_classes = 100
         transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
         trainset = dataloader(root = '.data', train=True, download = True, transform = transform)
         valset = dataloader(root = '.data', train=False, download = True, transform = transform)
-        train_loader = data.DataLoader(trainset, batch_size=args.batch_size,shuffle=True, num_workers=args.workers)    
-    elif args.dataset== 'imagenet':
-        num_classes=1000
-        traindir = os.path.join(args.data, 'train')
-        valdir = os.path.join(args.data, 'val')
-
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-        trainset = datasets.ImageFolder(
-            traindir,
-            transform = transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-            ]))
-        valset = datasets.ImageFolder(
-            valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-            ]))
+            
+    
     else:
         print("Error: dataset unknown!")
         
@@ -189,6 +174,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     if args.arch.startswith('alexnet'):
         model = AlexNet(num_classes=num_classes, drop_rate=args.drop_rate)
+        print("Using dropout {} for training".format(args.drop_rate))
     else:
         model = models.__dict__[args.arch](num_classes=num_classes)
 
@@ -220,10 +206,7 @@ def main_worker(gpu, ngpus_per_node, args):
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
     if (args.dataset == 'cifar10' or args.dataset == 'cifar100'):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay = args.weight_decay)
-    elif args.dataset == 'imagenet':
-        optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    
     
     # optionally resume from a checkpoint
     if args.resume:
@@ -242,14 +225,9 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    
-    dataloader = datasets.CIFAR10
-    num_classes = 10
-    transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
-    trainset = dataloader(root = '.data', train=True, download = True, transform = transform)
-    valset = dataloader(root = '.data', train=False, download = True, transform = transform)
-    train_loader = data.DataLoader(trainset, batch_size=args.batch_size,shuffle=True, num_workers=args.workers)
+    
+    
 
     
 
@@ -258,18 +236,20 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         train_sampler = None
 
+    
+
     train_loader = data.DataLoader(
         trainset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-    val_loader = data.DataLoader(
-        valset,
+    val_loader = data.DataLoader(valset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, model, criterion, 1, args)
         return
+    
 
     for epoch in range(args.start_epoch, args.epochs):
         start_time = time.time()
@@ -281,7 +261,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, epoch, args)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -304,6 +284,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+
+    #Tensorboard Summarywriter
+    if args.dataset == 'cifar10':
+        directory = 'runs/cifar10'
+    elif args.dataset == 'cifar100':
+        directory = 'runs/cifar100'
+    
+    tb = SummaryWriter(log_dir=os.path.join(directory,args.runfolder))
 
     # switch to train mode
     model.train()
@@ -345,13 +333,25 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                   'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1, top5=top5))
+    tb.add_scalar('Loss (Training)', losses.avg, epoch)
+    tb.add_scalar('Top 1 Training-Accuracy', top1.avg,epoch)
+    tb.add_scalar('Top 5 Training-Accuracy', top5.avg,epoch)
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, epoch, args):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
+
+    #Tensorboard Summarywriter
+    
+    if args.dataset == 'cifar10':
+        directory = 'runs/cifar10'
+    elif args.dataset == 'cifar100':
+        directory = 'runs/cifar100'
+    
+    tb = SummaryWriter(log_dir=os.path.join(directory,args.runfolder))
 
     # switch to evaluate mode
     model.eval()
@@ -385,11 +385,15 @@ def validate(val_loader, model, criterion, args):
                       'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
                        i, len(val_loader), batch_time=batch_time, loss=losses,
                        top1=top1, top5=top5))
-
+        
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
+    tb.add_scalar('Loss (Test)', losses.avg, epoch)
+    tb.add_scalar('Top 1 Test-Accuracy', top1.avg,epoch)
+    tb.add_scalar('Top 5 Test-Accuracy', top5.avg,epoch)
 
     return top1.avg
+
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
