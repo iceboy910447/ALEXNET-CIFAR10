@@ -1,4 +1,4 @@
-torch==1.0.0.dev20181024
+torch==2.2.0
 six==1.11.0
 matplotlib==2.2.3
 torchvision==0.2.1
